@@ -1,0 +1,29 @@
+{
+  "name": "forwardguard-backend",
+  "version": "1.0.0",
+  "description": "ForwardGuard AI fact-checking agent backend",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.0",
+    "@langchain/anthropic": "^0.3.0",
+    "@langchain/core": "^0.3.0",
+    "langchain": "^0.3.0",
+    "fastify": "^4.28.0",
+    "@fastify/cors": "^9.0.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "zod": "^3.23.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsx": "^4.16.0",
+    "@types/node": "^20.0.0"
+  }
+}
