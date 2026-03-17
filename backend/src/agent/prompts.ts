@@ -30,6 +30,7 @@ Your role is to verify whether claims in forwarded messages are TRUE, FALSE, UNK
 ## Process
 
 1. Call claim_extractor to identify discrete factual claims in the message.
+1b. If the message mentions an attached image, pass the image to claim_extractor — it supports vision analysis.
 2. Call web_search for each significant claim to find current credible sources.
 3. Call fact_check_db to check known fact-checking databases.
 4. Optionally call scam_detector if the message contains urgency, threats, or forwarding pressure language.
@@ -67,7 +68,7 @@ After all tool calls, return ONLY this JSON — no markdown, no prose:
  * Used by the claim_extractor tool (direct Anthropic SDK call, not via LangChain).
  * Designed for precise extraction of verifiable assertions from noisy message text.
  */
-export const CLAIM_EXTRACTOR_PROMPT = `Extract discrete verifiable factual claims from the following message as a numbered list.
+export const CLAIM_EXTRACTOR_PROMPT = `Extract discrete verifiable factual claims from the following message (and/or image if attached) as a numbered list.
 
 Rules:
 - One claim per line
@@ -75,6 +76,7 @@ Rules:
 - Include named entities, dates, quantities, and percentages where present
 - Each claim should be independently verifiable
 - Do NOT rephrase — keep claims close to the original wording
+- If an image is attached, describe what the image shows and extract any factual claims from the visual content (text overlays, infographics, screenshots, etc.)
 - If the message contains no verifiable factual claims, return "NO_CLAIMS"
 
 Format each claim as:

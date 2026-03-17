@@ -1,85 +1,26 @@
 /**
  * agent/agent.ts — The core verification agent for ForwardGuard.
  *
- * Orchestrates multi-tool reasoning using LangChain's AgentExecutor with
- * the ReAct (Reason + Act) pattern. The agent loops through tool calls
- * until it has enough evidence to produce a structured verdict.
+ * Now uses a multi-agent orchestrator pattern instead of a single AgentExecutor.
+ * The pipeline consists of three specialized sub-agents:
+ * 1. Claim Analyst — extracts claims + RAG search against known misinformation
+ * 2. Source Verifier — web search, fact-check DBs, source credibility analysis
+ * 3. Verdict Synthesizer — produces the final structured verdict
  *
- * Why LangChain AgentExecutor over a custom loop:
- * - Built-in ReAct pattern with proper stop conditions
- * - Tool calling protocol handled automatically
- * - Intermediate step logging for observability
- * - Max iteration cap to prevent runaway loops
+ * The verify() export signature is preserved so routes don't change.
  */
 
-import { ChatAnthropic } from "@langchain/anthropic";
-import { createToolCallingAgent, AgentExecutor } from "langchain/agents";
-import { ChatPromptTemplate, MessagesPlaceholder, SystemMessagePromptTemplate, HumanMessagePromptTemplate } from "@langchain/core/prompts";
-import type { VerifyRequest, AgentVerdict, Claim, Source } from "../types/index.js";
+import type { VerifyRequest, AgentVerdict } from "../types/index.js";
 import type { Logger } from "../middleware/logger.js";
-import { SYSTEM_PROMPT } from "./prompts.js";
-import { claimExtractorTool } from "./tools/claimExtractor.js";
-import { webSearchTool } from "./tools/webSearch.js";
-import { factCheckTool } from "./tools/factCheck.js";
-import { scamDetectorTool } from "./tools/scamDetector.js";
+import { runOrchestrator } from "./agents/orchestrator.js";
 
-// ─── Agent Setup ────────────────────────────────────────────────────────────
+// ─── Request-Scoped Image Store ──────────────────────────────────────────
+// Kept for backward compatibility with tools that import getCurrentRequestImage.
+let _currentRequestImage: string | undefined;
+export function getCurrentRequestImage(): string | undefined { return _currentRequestImage; }
 
-const tools = [claimExtractorTool, webSearchTool, factCheckTool, scamDetectorTool];
+// ─── Default Fallback Verdict ────────────────────────────────────────────
 
-/**
- * Claude Sonnet as the agent LLM.
- *
- * Temperature 0: fact-checking is not creative — we want deterministic,
- * reproducible verdicts for the same input. This is critical for user trust.
- */
-const llm = new ChatAnthropic({
-  model: "claude-sonnet-4-6",
-  temperature: 0,
-  maxTokens: 4096,
-  // Override top_p via invocationKwargs — LangChain defaults top_p to -1,
-  // but newer Claude models reject temperature + top_p together.
-  invocationKwargs: { top_p: undefined, top_k: undefined },
-});
-
-/**
- * Prompt template with system message and agent scratchpad.
- * The scratchpad holds the agent's intermediate reasoning steps.
- */
-// Why SystemMessagePromptTemplate.fromTemplate is not used: SYSTEM_PROMPT contains
-// literal JSON curly braces that LangChain's f-string parser would choke on.
-// Using fromMessages with a pre-constructed template avoids this.
-const escapedSystemPrompt = SYSTEM_PROMPT.replace(/\{/g, "{{").replace(/\}/g, "}}");
-const prompt = ChatPromptTemplate.fromMessages([
-  ["system", escapedSystemPrompt],
-  ["human", "{input}"],
-  new MessagesPlaceholder("agent_scratchpad"),
-]);
-
-// Create the tool-calling agent
-const agent = createToolCallingAgent({ llm, tools, prompt });
-
-/**
- * AgentExecutor wraps the agent with iteration control and tool execution.
- *
- * maxIterations: 8 — hard cap to prevent runaway loops. In practice,
- * most verifications complete in 4-6 iterations (claim extraction +
- * 1-2 searches per claim + synthesis).
- *
- * returnIntermediateSteps: true — exposes every Thought → Action → Observation
- * for full observability and debugging.
- */
-const executor = new AgentExecutor({
-  agent,
-  tools,
-  maxIterations: 8,
-  returnIntermediateSteps: true,
-  verbose: false, // We handle our own logging below
-});
-
-// ─── Verdict Parsing ────────────────────────────────────────────────────────
-
-/** Default fallback verdict when agent output can't be parsed */
 const FALLBACK_VERDICT: AgentVerdict = {
   verdict: "UNKNOWN",
   confidence: 0.3,
@@ -92,73 +33,10 @@ const FALLBACK_VERDICT: AgentVerdict = {
   reasoning: "Agent output could not be parsed into a structured verdict.",
 };
 
-/**
- * Parse the agent's output into a structured verdict.
- *
- * The agent is instructed to return JSON, but LLMs can be unpredictable.
- * We try multiple parsing strategies before falling back to a safe default.
- */
-function parseAgentOutput(output: string, toolsUsed: string[]): AgentVerdict {
-  try {
-    // Strategy 1: Direct JSON parse (agent followed instructions perfectly)
-    const parsed = JSON.parse(output);
-    return {
-      verdict: parsed.verdict ?? "UNKNOWN",
-      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
-      explanation: parsed.explanation ?? "No explanation provided.",
-      claims: Array.isArray(parsed.claims) ? parsed.claims as Claim[] : [],
-      sources: Array.isArray(parsed.sources) ? parsed.sources as Source[] : [],
-      toolsUsed,
-      reasoning: parsed.reasoning ?? "No reasoning provided.",
-    };
-  } catch {
-    // Strategy 2: Extract JSON from markdown code block (agent wrapped in ```json)
-    const jsonMatch = output.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1]);
-        return {
-          verdict: parsed.verdict ?? "UNKNOWN",
-          confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
-          explanation: parsed.explanation ?? "No explanation provided.",
-          claims: Array.isArray(parsed.claims) ? parsed.claims as Claim[] : [],
-          sources: Array.isArray(parsed.sources) ? parsed.sources as Source[] : [],
-          toolsUsed,
-          reasoning: parsed.reasoning ?? "No reasoning provided.",
-        };
-      } catch {
-        // Fall through to fallback
-      }
-    }
-
-    // Strategy 3: Try to find any JSON object in the output
-    const objectMatch = output.match(/\{[\s\S]*"verdict"[\s\S]*\}/);
-    if (objectMatch) {
-      try {
-        const parsed = JSON.parse(objectMatch[0]);
-        return {
-          verdict: parsed.verdict ?? "UNKNOWN",
-          confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
-          explanation: parsed.explanation ?? "No explanation provided.",
-          claims: Array.isArray(parsed.claims) ? parsed.claims as Claim[] : [],
-          sources: Array.isArray(parsed.sources) ? parsed.sources as Source[] : [],
-          toolsUsed,
-          reasoning: parsed.reasoning ?? "No reasoning provided.",
-        };
-      } catch {
-        // Fall through to fallback
-      }
-    }
-
-    // All parsing strategies failed — return safe fallback
-    return { ...FALLBACK_VERDICT, toolsUsed };
-  }
-}
-
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
- * Run the verification agent on a message.
+ * Run the multi-agent verification pipeline on a message.
  *
  * @param request - The verification request (message, context, language)
  * @param requestId - UUID for log correlation
@@ -170,96 +48,38 @@ export async function verify(
   requestId: string,
   log: Logger
 ): Promise<AgentVerdict> {
-  log.info({ messageLength: request.message.length }, "Agent starting verification");
+  log.info(
+    { messageLength: request.message.length, hasImage: !!request.imageBase64 },
+    "Multi-agent pipeline starting verification"
+  );
+
+  // Set request-scoped image for backward-compatible tool access
+  _currentRequestImage = request.imageBase64;
 
   try {
-    // Build the agent input — include context if provided
-    let input = `Verify this message:\n\n"${request.message}"`;
-    if (request.context) {
-      input += `\n\nAdditional context: ${request.context}`;
-    }
-    if (request.language && request.language !== "en") {
-      input += `\n\nNote: The message is in language code "${request.language}".`;
-    }
-
-    const result = await executor.invoke({ input });
-
-    // Extract which tools were actually called from intermediate steps
-    const intermediateSteps = result.intermediateSteps as Array<{
-      action: { tool: string };
-      observation: string;
-    }>;
-
-    const toolsUsed = [
-      ...new Set(intermediateSteps.map((step) => step.action.tool)),
-    ];
-
-    // Log each intermediate step for observability
-    for (const [index, step] of intermediateSteps.entries()) {
-      log.info(
-        {
-          step: index + 1,
-          tool: step.action.tool,
-          observationLength: step.observation.length,
-        },
-        `Agent step ${index + 1}: ${step.action.tool}`
-      );
-    }
-
-    // Parse the agent's final output.
-    // LangChain may return the output as a string, a content block array, or
-    // an Anthropic-style message. We normalize to a plain text string.
-    const rawOutput = result.output;
-    let agentOutput: string;
-
-    if (Array.isArray(rawOutput)) {
-      // Content block array: [{ type: "text", text: "..." }, ...]
-      agentOutput = rawOutput
-        .filter((block: Record<string, unknown>) => block.type === "text")
-        .map((block: Record<string, unknown>) => String(block.text ?? ""))
-        .join("\n");
-    } else if (typeof rawOutput === "string") {
-      // Check if the string is a serialized content block array
-      try {
-        const parsed = JSON.parse(rawOutput);
-        if (Array.isArray(parsed) && parsed[0]?.type === "text") {
-          agentOutput = parsed
-            .filter((block: Record<string, unknown>) => block.type === "text")
-            .map((block: Record<string, unknown>) => String(block.text ?? ""))
-            .join("\n");
-        } else {
-          agentOutput = rawOutput;
-        }
-      } catch {
-        agentOutput = rawOutput;
-      }
-    } else {
-      agentOutput = JSON.stringify(rawOutput);
-    }
-    log.info({ outputType: typeof rawOutput, isArray: Array.isArray(rawOutput), agentOutputLength: agentOutput.length, agentOutputPreview: agentOutput.slice(0, 300) }, "Raw agent output");
-    const verdict = parseAgentOutput(agentOutput, toolsUsed);
+    const verdict = await runOrchestrator(request, log);
 
     log.info(
       {
         verdict: verdict.verdict,
         confidence: verdict.confidence,
         toolsUsed: verdict.toolsUsed,
-        totalSteps: intermediateSteps.length,
       },
-      "Agent completed verification"
+      "Multi-agent pipeline completed verification"
     );
 
+    _currentRequestImage = undefined;
     return verdict;
   } catch (error) {
+    _currentRequestImage = undefined;
     log.error(
       { error: error instanceof Error ? error.message : String(error) },
-      "Agent verification failed"
+      "Multi-agent pipeline verification failed"
     );
 
-    // Return a safe fallback — never let agent errors propagate as raw errors
     return {
       ...FALLBACK_VERDICT,
-      reasoning: `Agent error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      reasoning: `Pipeline error: ${error instanceof Error ? error.message : "Unknown error"}`,
     };
   }
 }

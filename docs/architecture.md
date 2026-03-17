@@ -1,117 +1,134 @@
-# ForwardGuard — System Architecture
+# ForwardGuard v2 — System Architecture
 
 ## Overview
 
-ForwardGuard is a layered system that connects a Chrome extension (injected into WhatsApp Web) to an AI-powered verification backend. Each layer has a single responsibility, making the system testable, observable, and maintainable.
+ForwardGuard is a multi-agent AI system that verifies claims in WhatsApp messages. It connects a Chrome extension (injected into WhatsApp Web) to an AI-powered verification backend with **8 LLM touchpoints**, RAG-based misinformation retrieval, multi-modal vision support, and PDF document analysis.
 
 ## Architecture Diagram
 
-```mermaid
-graph TD
-    subgraph Browser["Browser Layer"]
-        WA["WhatsApp Web<br/>(web.whatsapp.com)"]
-        CS["Content Script<br/>(Plasmo / React)"]
-        TT["Tooltip UI<br/>(Verdict Display)"]
-    end
-
-    subgraph API["Backend API Layer"]
-        FASTIFY["Fastify Server<br/>Port 3001"]
-        CORS["CORS Middleware<br/>chrome-extension:// + localhost"]
-        LOG["Pino Logger<br/>Structured JSON + requestId"]
-    end
-
-    subgraph Guard["Guardrails Layer"]
-        RL["Rate Limiter<br/>10 req/IP/min"]
-        ZOD["Zod Validator<br/>Schema Enforcement"]
-        CF["Content Filter<br/>Injection Protection"]
-        OG["Output Guardrails<br/>Response Validation"]
-    end
-
-    subgraph Agent["Agent Layer"]
-        EXEC["LangChain AgentExecutor<br/>ReAct Pattern"]
-        LLM["Claude Sonnet<br/>claude-sonnet-4-5<br/>Temperature: 0"]
-        PARSE["JSON Parser<br/>Structured Output"]
-    end
-
-    subgraph Tools["Tools Layer"]
-        CE["claim_extractor<br/>Claim Decomposition<br/>(Direct Anthropic SDK)"]
-        WS["web_search<br/>Live Web Search<br/>(Tavily API)"]
-        FC["fact_check_db<br/>Fact-Check Orgs<br/>(Tavily Filtered)"]
-        SD["scam_detector<br/>Pattern Matching<br/>(Regex Engine)"]
-    end
-
-    subgraph External["External APIs"]
-        ANTHROPIC["Anthropic API<br/>claude-sonnet-4-5"]
-        TAVILY["Tavily Search API<br/>Web + Domain Filtering"]
-    end
-
-    %% Request flow
-    WA -->|"User clicks Verify"| CS
-    CS -->|"POST /api/v1/verify<br/>{message, context?}"| FASTIFY
-    FASTIFY --> CORS
-    CORS --> LOG
-    LOG --> RL
-    RL --> ZOD
-    ZOD --> CF
-    CF -->|"Validated request"| EXEC
-
-    %% Agent reasoning loop
-    EXEC <-->|"Prompt + Tools"| LLM
-    EXEC --> CE
-    EXEC --> WS
-    EXEC --> FC
-    EXEC --> SD
-
-    %% External API calls
-    CE -->|"Direct SDK call"| ANTHROPIC
-    WS -->|"search_depth: advanced"| TAVILY
-    FC -->|"include_domains filter"| TAVILY
-
-    %% Response flow
-    EXEC -->|"Agent output"| PARSE
-    PARSE --> OG
-    OG -->|"VerifyResponse JSON"| FASTIFY
-    FASTIFY -->|"200 + verdict"| CS
-    CS --> TT
-    TT -->|"Verdict + Sources + Confidence"| WA
-
-    %% Styling
-    classDef browser fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    classDef api fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef agent fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    classDef tools fill:#fce4ec,stroke:#c62828,stroke-width:2px
-    classDef external fill:#f5f5f5,stroke:#616161,stroke-width:2px
-
-    class WA,CS,TT browser
-    class FASTIFY,CORS,LOG api
-    class RL,ZOD,CF,OG guard
-    class EXEC,LLM,PARSE agent
-    class CE,WS,FC,SD tools
-    class ANTHROPIC,TAVILY external
 ```
+┌──────────────────────────────────────────────────────────────────┐
+│  BROWSER LAYER (Chrome Extension - Plasmo)                       │
+│                                                                  │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────┐  ┌────────┐ │
+│  │  WhatsApp    │  │   Image      │  │    PDF     │  │Tooltip │ │
+│  │  Content     │  │   Extractor  │  │  Detector  │  │   UI   │ │
+│  │  Script      │  │  (Canvas→B64)│  │            │  │        │ │
+│  └──────┬───────┘  └──────────────┘  └────────────┘  └────────┘ │
+│         │                                                        │
+│         ▼                                                        │
+│  ┌──────────────────────────────────────────────────────────────┐│
+│  │  API Client (verify.ts) — POST /verify {msg, img?, pdf?}    ││
+│  └──────────────────────────┬───────────────────────────────────┘│
+└─────────────────────────────┼────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  API LAYER (Fastify)                                             │
+│  ┌──────┐  ┌───────────┐  ┌──────────────┐  ┌────────────────┐ │
+│  │ CORS │→ │ Rate Limit │→ │ Zod Validate │→ │ Content Filter │ │
+│  └──────┘  └───────────┘  └──────────────┘  └───────┬────────┘ │
+└──────────────────────────────────────────────────────┼──────────┘
+                                                       │
+                              ▼                        │
+┌──────────────────────────────────────────────────────────────────┐
+│  MULTI-AGENT LAYER (LangChain + Claude Sonnet 4)                │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  ORCHESTRATOR AGENT                                        │  │
+│  │  Coordinates pipeline: Analyze → Verify → Synthesize       │  │
+│  └──┬────────────────────────┬────────────────────┬───────────┘  │
+│     │                        │                    │              │
+│     ▼                        ▼                    ▼              │
+│  ┌──────────────┐  ┌──────────────────┐  ┌───────────────────┐  │
+│  │ CLAIM ANALYST│  │ SOURCE VERIFIER  │  │ VERDICT SYNTH     │  │
+│  │ AGENT        │  │ AGENT            │  │ AGENT             │  │
+│  │              │  │                  │  │                   │  │
+│  │ • Vision     │  │ • Web Search     │  │ • Evidence Fusion │  │
+│  │ • PDF Parse  │  │ • Fact-Check DB  │  │ • Confidence Cal. │  │
+│  │ • RAG Search │  │ • Source Cred.   │  │ • JSON Output     │  │
+│  │ • Claim Ext. │  │ • LLM Scam Det. │  │                   │  │
+│  └──────────────┘  └──────────────────┘  └───────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  TOOLS & DATA LAYER                                              │
+│                                                                  │
+│  ┌───────────────┐  ┌───────────────┐  ┌──────────────────────┐ │
+│  │ Web Search    │  │ Fact-Check DB │  │ RAG Pipeline         │ │
+│  │ (Tavily)      │  │ (Tavily filt.)│  │ ┌──────────────────┐ │ │
+│  └───────────────┘  └───────────────┘  │ │ Vector Store     │ │ │
+│                                        │ │ (Jaccard Sim.)   │ │ │
+│  ┌───────────────┐  ┌───────────────┐  │ ├──────────────────┤ │ │
+│  │ LLM Scam      │  │ Source Cred.  │  │ │ Misinfo KB       │ │ │
+│  │ Detector      │  │ Analyzer      │  │ │ (20+ hoaxes)     │ │ │
+│  │ (Claude)      │  │ (Claude)      │  │ └──────────────────┘ │ │
+│  └───────────────┘  └───────────────┘  └──────────────────────┘ │
+│                                                                  │
+│  ┌───────────────┐  ┌───────────────┐  ┌──────────────────────┐ │
+│  │ PDF Extractor │  │ Claude Vision │  │ Claim Extractor      │ │
+│  │ (Claude LLM)  │  │ (Image→Text)  │  │ (Claude LLM)        │ │
+│  └───────────────┘  └───────────────┘  └──────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  EXTERNAL APIs                                                   │
+│  ┌─────────────────────┐  ┌─────────────────────────────────┐   │
+│  │ Anthropic API       │  │ Tavily Search API               │   │
+│  │ Claude Sonnet 4     │  │ Web + Domain Filtering          │   │
+│  │ (8 LLM touchpoints) │  │                                 │   │
+│  └─────────────────────┘  └─────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## LLM Touchpoints (8 total)
+
+| # | Component | LLM Usage | Model |
+|---|-----------|-----------|-------|
+| 1 | Orchestrator Agent | Pipeline coordination & routing | Claude Sonnet 4 |
+| 2 | Claim Analyst Agent | Claim extraction from text | Claude Sonnet 4 |
+| 3 | Claim Analyst Agent | Vision analysis (images) | Claude Sonnet 4 (Vision) |
+| 4 | Source Verifier Agent | Source credibility analysis | Claude Sonnet 4 |
+| 5 | LLM Scam Detector | Manipulation psychology analysis | Claude Sonnet 4 |
+| 6 | PDF Extractor | Document understanding & claim extraction | Claude Sonnet 4 |
+| 7 | RAG Pipeline | Semantic matching against known misinformation | Keyword + Jaccard similarity |
+| 8 | Verdict Synthesizer | Evidence fusion & confidence calibration | Claude Sonnet 4 |
 
 ## Layer Descriptions
 
 ### Browser Layer
-The Chrome extension (built with Plasmo) injects into WhatsApp Web's DOM. A MutationObserver watches for new messages and adds "Verify" buttons. When clicked, the extension calls the backend API and renders a tooltip with the verdict.
+The Chrome extension (built with Plasmo) injects into WhatsApp Web's DOM. A MutationObserver watches for new messages and adds "Verify" buttons. Supports three verification modes:
+- **Text**: Extract message text and verify claims
+- **Image**: Extract images via Canvas API, encode as base64, send for vision analysis
+- **PDF**: Detect PDF attachments, extract preview metadata, send for LLM document analysis
 
 ### Backend API Layer
-Fastify handles HTTP with built-in Pino logging. Every request gets a UUID (`requestId`) that flows through all log lines for end-to-end tracing. CORS is locked to extension and localhost origins only.
+Fastify handles HTTP with built-in Pino logging. Every request gets a UUID (`requestId`) that flows through all log lines for end-to-end tracing. CORS allows extension and WhatsApp Web origins. Body limit set to 10MB for image payloads.
 
 ### Guardrails Layer
-Defence-in-depth: rate limiting prevents abuse, Zod validates input shape, content filters block prompt injection attempts. On the output side, we validate the agent's response before returning it to the user — never exposing raw LLM output.
+Defence-in-depth: rate limiting prevents abuse, Zod validates input shape (text, image, PDF), content filters block prompt injection attempts. On the output side, we validate the agent's response before returning it to the user — never exposing raw LLM output.
 
-### Agent Layer
-LangChain's AgentExecutor implements the ReAct pattern: the agent reasons about what tool to call next, observes the result, and loops until it has enough evidence. Claude Sonnet at temperature 0 ensures deterministic, reproducible verdicts.
+### Multi-Agent Layer
+Three specialized agents coordinated by an orchestrator in a sequential pipeline:
 
-### Tools Layer
-Four specialized tools, each with a single responsibility:
-- **claim_extractor**: Uses a direct Anthropic SDK call (not LangChain) for precise claim decomposition
+1. **Claim Analyst Agent**: Extracts verifiable claims using Claude vision (for images) and text analysis. Runs RAG search against known misinformation database. Handles PDF document parsing.
+
+2. **Source Verifier Agent**: For each claim, runs parallel web searches and fact-check database queries. Uses LLM to analyze source credibility (domain reputation, writing quality, bias indicators). Runs LLM-based scam detection for manipulation pattern analysis.
+
+3. **Verdict Synthesizer Agent**: Fuses all evidence — claims, sources, RAG matches, scam analysis — into a structured verdict with confidence calibration and step-by-step reasoning.
+
+### Tools & Data Layer
+Seven specialized tools, each with a single responsibility:
+- **claim_extractor**: Direct Anthropic SDK call with vision support for claim decomposition
 - **web_search**: Tavily advanced search with credibility scoring
 - **fact_check_db**: Tavily filtered to trusted fact-checking domains only
-- **scam_detector**: Deterministic regex patterns — no LLM hallucination risk
+- **scam_detector**: LLM-powered manipulation psychology analysis (replaces regex)
+- **source_credibility**: LLM-powered domain/content credibility evaluation
+- **pdf_extractor**: LLM-powered document understanding and claim extraction
+- **rag_misinfo_search**: Semantic search against curated misinformation knowledge base (20+ known hoaxes)
 
 ### External APIs
-- **Anthropic**: Powers both the agent LLM and the claim extractor
-- **Tavily**: Purpose-built search API for LLM agents with clean snippet extraction
+- **Anthropic**: Powers all 7 LLM touchpoints (agent reasoning, vision, scam detection, credibility analysis, PDF parsing, claim extraction, verdict synthesis)
+- **Tavily**: Purpose-built search API for LLM agents with clean snippet extraction and domain filtering

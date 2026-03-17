@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { Claim, ClaimType } from "../../types/index.js";
 import { CLAIM_EXTRACTOR_PROMPT } from "../prompts.js";
 import { logger } from "../../middleware/logger.js";
+import { getCurrentRequestImage } from "../agent.js";
 
 const anthropic = new Anthropic();
 
@@ -88,12 +89,30 @@ export const claimExtractorTool = new DynamicStructuredTool({
       // Direct Anthropic SDK call — not via LangChain.
       // Why: claim extraction is a simple, focused task that benefits from
       // a dedicated system prompt, not the agent's full system prompt.
+
+      // Build multimodal content if an image is attached
+      const imageBase64 = getCurrentRequestImage();
+      const userContent: Anthropic.MessageCreateParams["messages"][0]["content"] = [];
+
+      if (imageBase64) {
+        const match = imageBase64.match(/^data:image\/(png|jpeg|gif|webp);base64,(.+)$/s);
+        if (match) {
+          userContent.push({
+            type: "image",
+            source: { type: "base64", media_type: `image/${match[1]}` as "image/png" | "image/jpeg" | "image/gif" | "image/webp", data: match[2] },
+          });
+        }
+        log.info("Including image in claim extraction (vision mode)");
+      }
+
+      userContent.push({ type: "text", text: message || "(no text — analyze the image)" });
+
       const response = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 1024,
-        temperature: 0, // Deterministic — same message should always extract same claims
+        temperature: 0,
         system: CLAIM_EXTRACTOR_PROMPT,
-        messages: [{ role: "user", content: message }],
+        messages: [{ role: "user", content: userContent }],
       });
 
       const textBlock = response.content.find((block) => block.type === "text");

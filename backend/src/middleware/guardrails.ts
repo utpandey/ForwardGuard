@@ -82,8 +82,8 @@ export const VerifyRequestSchema = z.object({
   message: z
     .string()
     .trim()
-    .min(5, "Message must be at least 5 characters")
-    .max(2000, "Message must not exceed 2000 characters"),
+    .max(2000, "Message must not exceed 2000 characters")
+    .default(""),
   context: z
     .string()
     .max(500, "Context must not exceed 500 characters")
@@ -93,7 +93,18 @@ export const VerifyRequestSchema = z.object({
     .length(2, "Language must be a 2-character ISO 639-1 code")
     .default("en")
     .optional(),
-});
+  imageBase64: z
+    .string()
+    .max(10_000_000, "Image must not exceed ~7.5MB encoded")
+    .optional(),
+  pdfText: z
+    .string()
+    .max(10_000, "PDF text must not exceed 10000 characters")
+    .optional(),
+}).refine(
+  (data) => data.message.length >= 5 || !!data.imageBase64 || !!data.pdfText,
+  { message: "Either message (min 5 chars), an image, or PDF text is required" }
+);
 
 export type ValidatedVerifyRequest = z.infer<typeof VerifyRequestSchema>;
 
@@ -135,10 +146,11 @@ export class ContentBlockedError extends Error {
  * Run input guardrails on the message text.
  * Checks for prompt injection patterns and minimum word count.
  */
-export function runInputGuardrails(message: string, log: Logger): void {
+export function runInputGuardrails(message: string, log: Logger, hasImage?: boolean): void {
   // Check word count — messages under 3 words are not meaningful to verify
+  // Skip this check if an image is attached (image is the content)
   const wordCount = message.trim().split(/\s+/).length;
-  if (wordCount < 3) {
+  if (wordCount < 3 && !hasImage) {
     log.warn({ wordCount }, "Message too short for verification");
     throw new ContentBlockedError(
       "Message is too short to verify. Please provide a complete claim or statement.",

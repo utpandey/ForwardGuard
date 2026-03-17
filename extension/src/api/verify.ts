@@ -60,17 +60,17 @@ const BACKEND_URL =
  */
 export async function verifyMessage(
   message: string,
-  context?: string
+  context?: string,
+  imageBase64?: string,
+  pdfText?: string
 ): Promise<VerifyResult> {
   try {
+    const timeout = imageBase64 || pdfText ? 90_000 : 60_000;
     const response = await fetch(`${BACKEND_URL}/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, context }),
-      // 30 second timeout — agent needs time for multi-tool reasoning.
-      // Typical verification takes 5-12 seconds, but complex claims with
-      // multiple tool calls can take longer.
-      signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({ message, context, imageBase64, pdfText }),
+      signal: AbortSignal.timeout(timeout),
     });
 
     const data = await response.json();

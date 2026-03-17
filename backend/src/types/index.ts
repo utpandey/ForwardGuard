@@ -22,6 +22,8 @@ export interface VerifyRequest {
   message: string;
   context?: string;
   language?: string;
+  imageBase64?: string;
+  pdfText?: string;
 }
 
 export interface Claim {

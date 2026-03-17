@@ -97,11 +97,11 @@ export async function verifyRoutes(fastify: FastifyInstance): Promise<void> {
           throw err;
         }
 
-        const { message, context, language } = validated;
+        const { message, context, language, imageBase64, pdfText } = validated;
 
         // Step 5: Input content guardrails — block dangerous patterns
         try {
-          runInputGuardrails(message, log);
+          runInputGuardrails(message, log, !!imageBase64 || !!pdfText);
         } catch (err) {
           if (err instanceof ContentBlockedError) {
             reply.status(422);
@@ -119,7 +119,7 @@ export async function verifyRoutes(fastify: FastifyInstance): Promise<void> {
 
         // Step 7: Run the agent
         const agentResult = await verify(
-          { message, context, language },
+          { message, context, language, imageBase64, pdfText },
           requestId,
           log
         );

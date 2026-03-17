@@ -33,8 +33,8 @@ if (!process.env.TAVILY_API_KEY) {
 // ─── Server Setup ───────────────────────────────────────────────────────────
 
 const fastify = Fastify({
-  // Use our custom Pino logger instance for consistent formatting
-  logger: false, // We handle logging ourselves via middleware/logger.ts
+  logger: false,
+  bodyLimit: 10 * 1024 * 1024, // 10MB — needed for base64 image payloads
 });
 
 // ─── CORS ───────────────────────────────────────────────────────────────────
@@ -50,6 +50,11 @@ await fastify.register(cors, {
     }
     // Allow Chrome extension origins (chrome-extension://...)
     if (origin.startsWith("chrome-extension://")) {
+      cb(null, true);
+      return;
+    }
+    // Allow WhatsApp Web (content script runs in this origin)
+    if (origin === "https://web.whatsapp.com") {
       cb(null, true);
       return;
     }

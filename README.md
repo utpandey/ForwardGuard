@@ -1,77 +1,85 @@
 # ForwardGuard
 
-**AI-powered misinformation verification for WhatsApp Web**
+**Multi-Agent AI Fact-Checking System for WhatsApp Web**
 
-Misinformation spreads faster than ever through private messaging. WhatsApp forwards reach millions before anyone checks if they're true. ForwardGuard tackles this by embedding an AI fact-checking agent directly into WhatsApp Web — users click a "Verify" button next to any message and get an instant, sourced verdict.
+Misinformation spreads faster than ever through private messaging. WhatsApp forwards reach millions before anyone checks if they're true. ForwardGuard tackles this by embedding an AI fact-checking system directly into WhatsApp Web — users click a "Verify" button next to any message and get an instant, sourced verdict.
 
-This is not a simple chatbot or RAG pipeline. ForwardGuard is a **tool-using AI agent** that follows the ReAct (Reason + Act) pattern: it decomposes claims, searches the live web, queries fact-checking databases, detects scam patterns, and synthesizes evidence into a structured verdict — all with full observability and guardrails.
+ForwardGuard is a **multi-agent AI system** with **8 LLM touchpoints**, RAG-based misinformation retrieval, multi-modal vision support, and PDF document analysis. It uses three specialized AI agents (Claim Analyst, Source Verifier, Verdict Synthesizer) coordinated by an orchestrator to decompose claims, search the live web, query fact-checking databases, detect scam patterns, and synthesize evidence into a structured verdict.
+
+## Key Features
+
+- **Multi-Agent Architecture** — 3 specialized agents (Claim Analyst, Source Verifier, Verdict Synthesizer) coordinated by an orchestrator
+- **8 LLM Touchpoints** — LLM deeply integrated across claim extraction, vision analysis, scam detection, source credibility, PDF parsing, RAG queries, and verdict synthesis
+- **RAG Pipeline** — Vector store with 20+ known misinformation entries, semantic matching via Jaccard similarity
+- **Multi-Modal Verification** — Text, images (Claude Vision), and PDF documents
+- **LLM-Powered Scam Detection** — Analyzes manipulation psychology, urgency, fear, and social engineering (replaces basic regex)
+- **LLM Source Credibility Analysis** — Evaluates domain reputation, writing quality, and bias indicators
+- **PDF Document Verification** — Extracts and fact-checks claims from PDF attachments
+- **Full Observability** — Structured JSON logging with request tracing, per-agent step logging
+- **Defence-in-Depth Guardrails** — Rate limiting, Zod validation, prompt injection filtering, output validation
 
 ## Architecture
 
-```mermaid
-graph TD
-    subgraph Browser["Browser Layer"]
-        WA[WhatsApp Web]
-        EXT[Chrome Extension<br/>Plasmo + React]
-        TOOLTIP[Tooltip UI<br/>Verdict Display]
-    end
-
-    subgraph Backend["Backend API Layer"]
-        FASTIFY[Fastify Server<br/>CORS + Logging]
-        GUARD[Guardrails<br/>Rate Limit + Validation + Content Filter]
-        ROUTES[Route Handler<br/>POST /api/v1/verify]
-    end
-
-    subgraph Agent["Agent Layer"]
-        EXECUTOR[LangChain AgentExecutor<br/>ReAct Pattern]
-        LLM[Claude Sonnet<br/>Temperature 0]
-    end
-
-    subgraph Tools["Tools Layer"]
-        CE[claim_extractor<br/>Claim Decomposition]
-        WS[web_search<br/>Live Web Search]
-        FC[fact_check_db<br/>Fact-Check Orgs]
-        SD[scam_detector<br/>Pattern Matching]
-    end
-
-    subgraph External["External APIs"]
-        ANTHROPIC[Anthropic API<br/>Claude Sonnet]
-        TAVILY[Tavily Search API<br/>Web + Fact-Check]
-    end
-
-    WA -->|User clicks Verify| EXT
-    EXT -->|POST /api/v1/verify| FASTIFY
-    FASTIFY --> GUARD
-    GUARD --> ROUTES
-    ROUTES --> EXECUTOR
-    EXECUTOR --> LLM
-    LLM --> CE & WS & FC & SD
-    CE -->|Direct SDK call| ANTHROPIC
-    WS -->|Search API| TAVILY
-    FC -->|Filtered search| TAVILY
-    SD -->|Regex patterns| SD
-    EXECUTOR -->|Structured JSON| ROUTES
-    ROUTES -->|VerifyResponse| EXT
-    EXT --> TOOLTIP
-    TOOLTIP -->|Verdict + Sources| WA
+```
+┌──────────────────────────────────────────────────────────────┐
+│  BROWSER LAYER (Chrome Extension)                            │
+│  WhatsApp Content Script → Image Extractor → PDF Detector    │
+│  API Client (POST /verify {message, image?, pdf?})           │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+┌──────────────────────────┼───────────────────────────────────┐
+│  API LAYER (Fastify)     ▼                                   │
+│  CORS → Rate Limit → Zod Validate → Content Filter           │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+┌──────────────────────────┼───────────────────────────────────┐
+│  MULTI-AGENT LAYER       ▼                                   │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              ORCHESTRATOR AGENT                          │ │
+│  └──┬──────────────────┬───────────────────────┬───────────┘ │
+│     ▼                  ▼                       ▼             │
+│  ┌──────────┐  ┌────────────────┐  ┌──────────────────────┐ │
+│  │ CLAIM    │  │ SOURCE         │  │ VERDICT              │ │
+│  │ ANALYST  │  │ VERIFIER       │  │ SYNTHESIZER          │ │
+│  │ • Vision │  │ • Web Search   │  │ • Evidence Fusion    │ │
+│  │ • PDF    │  │ • Fact-Check   │  │ • Confidence Cal.    │ │
+│  │ • RAG    │  │ • Credibility  │  │ • JSON Output        │ │
+│  └──────────┘  │ • Scam Detect  │  └──────────────────────┘ │
+│                └────────────────┘                            │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+┌──────────────────────────┼───────────────────────────────────┐
+│  TOOLS & DATA LAYER      ▼                                   │
+│  Web Search (Tavily) │ Fact-Check DB │ RAG Vector Store      │
+│  LLM Scam Detector │ Source Credibility │ PDF Extractor      │
+│  Claude Vision │ Claim Extractor │ Misinfo Knowledge Base    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## How It Works — The Agent Reasoning Loop
+## LLM Touchpoints (8 total)
 
-1. **User clicks "Verify"** on any WhatsApp message
-2. The extension sends the message text to the backend
+| # | Component | LLM Usage |
+|---|-----------|-----------|
+| 1 | Claim Analyst Agent | Claim extraction from text via Claude |
+| 2 | Claim Analyst Agent | Vision analysis for images via Claude Vision |
+| 3 | PDF Extractor | Document understanding & claim extraction |
+| 4 | RAG Pipeline | Semantic matching against known misinformation |
+| 5 | Source Verifier Agent | Source credibility analysis via Claude |
+| 6 | LLM Scam Detector | Manipulation psychology analysis via Claude |
+| 7 | Verdict Synthesizer | Evidence fusion & confidence calibration |
+| 8 | Orchestrator | Pipeline coordination & routing |
+
+## How It Works — The Multi-Agent Pipeline
+
+1. **User clicks "Verify"** on any WhatsApp message (text, image, or PDF)
+2. The extension extracts content (text, image as base64, or PDF metadata) and sends to backend
 3. **Input guardrails** validate and sanitize the request
-4. The **AI agent** begins its ReAct loop:
-   - **Think**: What claims does this message make?
-   - **Act**: Call `claim_extractor` to decompose the message
-   - **Think**: What does the web say about each claim?
-   - **Act**: Call `web_search` for current sources
-   - **Act**: Call `fact_check_db` for dedicated fact-checker verdicts
-   - **Think**: Are there scam patterns?
-   - **Act**: Call `scam_detector` if suspicious signals found
-   - **Synthesize**: Weigh all evidence and produce a verdict
+4. **Orchestrator Agent** coordinates the pipeline:
+   - **Stage 1 — Claim Analyst**: Extracts claims using Claude (with Vision for images, PDF parsing for documents). Runs RAG search against known misinformation database.
+   - **Stage 2 — Source Verifier**: For each claim, runs parallel web searches and fact-check DB queries. LLM analyzes source credibility. LLM detects scam/manipulation patterns.
+   - **Stage 3 — Verdict Synthesizer**: Fuses all evidence into a structured verdict with confidence calibration and step-by-step reasoning.
 5. **Output guardrails** validate the response
-6. The tooltip displays: verdict, confidence, explanation, sources, and tools used
+6. Tooltip displays: verdict, confidence, explanation, sources, and tools used
 
 ## Tech Stack
 
@@ -79,12 +87,12 @@ graph TD
 |---|---|
 | **Fastify** | Faster than Express, better TypeScript support, built-in Pino logging |
 | **TypeScript (strict)** | Type safety across the entire codebase |
-| **LangChain** | Agent orchestration with tool calling, intermediate step logging |
-| **Claude Sonnet** | Best-in-class tool calling, structured JSON output, fast |
-| **Tavily** | Purpose-built for LLM agents, clean snippets, answer synthesis |
+| **LangChain** | Agent orchestration framework, tool calling abstractions |
+| **Claude Sonnet 4** | Best-in-class tool calling, vision, structured JSON output |
+| **Tavily** | Purpose-built search API for LLM agents with domain filtering |
 | **Pino** | Structured JSON logging with requestId correlation |
 | **Zod** | Runtime input validation with type inference |
-| **Plasmo** | Modern Chrome extension framework with React + hot reload |
+| **Plasmo** | Modern Chrome extension framework with hot reload |
 
 ## Project Structure
 
@@ -92,43 +100,51 @@ graph TD
 forwardguard/
 ├── README.md
 ├── docs/
-│   ├── architecture.md          # System architecture (Mermaid)
-│   ├── sequence-diagram.md      # Request lifecycle (Mermaid)
-│   ├── agent-flow.md            # Agent reasoning flow (Mermaid)
-│   ├── requirements.md          # Feature checklist tracker
-│   └── api-spec.md              # API contract documentation
+│   ├── architecture.md          # System architecture diagram
+│   ├── sequence-diagram.md      # Request lifecycle
+│   ├── agent-flow.md            # Agent reasoning flow
+│   ├── requirements.md          # Feature checklist
+│   └── api-spec.md              # API contract
 ├── backend/
 │   ├── src/
 │   │   ├── index.ts             # Fastify server entry point
-│   │   ├── types/
-│   │   │   └── index.ts         # All shared TypeScript types
+│   │   ├── types/index.ts       # All shared TypeScript types
 │   │   ├── middleware/
 │   │   │   ├── logger.ts        # Pino structured logger
 │   │   │   └── guardrails.ts    # Input/output guardrails + rate limit
 │   │   ├── agent/
-│   │   │   ├── agent.ts         # LangChain AgentExecutor
+│   │   │   ├── agent.ts         # Multi-agent pipeline entry point
 │   │   │   ├── prompts.ts       # All LLM prompts (versioned)
+│   │   │   ├── agents/
+│   │   │   │   ├── orchestrator.ts      # Pipeline coordinator
+│   │   │   │   ├── claimAnalyst.ts      # Claim extraction + Vision + RAG
+│   │   │   │   ├── sourceVerifier.ts    # Web search + credibility analysis
+│   │   │   │   └── verdictSynthesizer.ts # Evidence fusion + verdict
+│   │   │   ├── rag/
+│   │   │   │   ├── vectorStore.ts       # Jaccard similarity search
+│   │   │   │   └── misinfoDb.ts         # 20+ known hoaxes seed data
 │   │   │   └── tools/
-│   │   │       ├── claimExtractor.ts
-│   │   │       ├── webSearch.ts
-│   │   │       ├── factCheck.ts
-│   │   │       └── scamDetector.ts
+│   │   │       ├── claimExtractor.ts    # LLM claim decomposition
+│   │   │       ├── webSearch.ts         # Tavily web search
+│   │   │       ├── factCheck.ts         # Tavily fact-check DB
+│   │   │       ├── scamDetector.ts      # LLM scam detection
+│   │   │       ├── sourceCredibility.ts # LLM source analysis
+│   │   │       ├── pdfExtractor.ts      # LLM PDF parsing
+│   │   │       └── ragSearch.ts         # RAG vector store search
 │   │   └── routes/
 │   │       └── verify.ts        # POST /api/v1/verify handler
 │   ├── package.json
-│   ├── tsconfig.json
-│   ├── .env.example
-│   └── .gitignore
+│   └── tsconfig.json
 └── extension/
     ├── src/
-    │   ├── content/
-    │   │   ├── index.tsx         # Content script (WhatsApp injection)
-    │   │   └── TooltipUI.tsx     # Verdict tooltip component
+    │   ├── contents/
+    │   │   └── whatsapp.ts      # Content script (WhatsApp DOM injection)
+    │   ├── lib/
+    │   │   └── TooltipUI.ts     # Verdict tooltip renderer
     │   └── api/
-    │       └── verify.ts         # HTTP client for backend
+    │       └── verify.ts        # HTTP client for backend
     ├── package.json
-    ├── tsconfig.json
-    └── .env.example
+    └── tsconfig.json
 ```
 
 ## Setup Instructions
@@ -143,6 +159,9 @@ forwardguard/
 ### 1. Clone and Install
 
 ```bash
+git clone git@github.com:utpandey/ForwardGuard.git
+cd ForwardGuard
+
 # Install backend dependencies
 cd backend && npm install
 
@@ -153,7 +172,6 @@ cd ../extension && npm install
 ### 2. Configure API Keys
 
 ```bash
-# Backend
 cp backend/.env.example backend/.env
 # Edit backend/.env and add your ANTHROPIC_API_KEY and TAVILY_API_KEY
 ```
@@ -163,11 +181,6 @@ cp backend/.env.example backend/.env
 ```bash
 cd backend
 npm run dev
-```
-
-The server starts on `http://localhost:3001`. You should see:
-```
-ForwardGuard backend listening on http://0.0.0.0:3001
 ```
 
 ### 4. Load the Extension in Chrome
@@ -180,9 +193,9 @@ npm run dev
 1. Open Chrome → `chrome://extensions/`
 2. Enable "Developer mode" (top right)
 3. Click "Load unpacked"
-4. Select the `extension/build/chrome-mv3-dev` folder
+4. Select `extension/build/chrome-mv3-dev`
 5. Open [WhatsApp Web](https://web.whatsapp.com)
-6. You'll see "Verify" buttons next to messages
+6. Click "Verify" on any message
 
 ### 5. Test with curl
 
@@ -190,81 +203,22 @@ npm run dev
 # Health check
 curl http://localhost:3001/api/v1/health
 
-# Verify a message
+# Verify a text message
 curl -X POST http://localhost:3001/api/v1/verify \
   -H "Content-Type: application/json" \
   -d '{"message": "NASA confirms Earth will experience 15 days of darkness in November 2024"}'
 ```
 
-## Usage
-
-1. Open [WhatsApp Web](https://web.whatsapp.com) in Chrome
-2. Find any forwarded message or suspicious claim
-3. Click the blue **Verify** button next to the message
-4. Wait a few seconds while the AI agent investigates
-5. Read the verdict tooltip showing: verdict, confidence, explanation, sources, and tools used
-
-## The 4 Verification Tools
-
-### 1. Claim Extractor
-Decomposes a multi-claim message into individual verifiable assertions using Claude Sonnet. This makes all downstream tool calls precise — each claim is checked independently.
-
-### 2. Web Search
-Searches the live web via Tavily for current, credible sources about each claim. Scores domain credibility (high/medium/low) and excludes known misinformation sites.
-
-### 3. Fact-Check Database
-Queries dedicated fact-checking organizations (Snopes, PolitiFact, FactCheck.org, Reuters, AP News, etc.) specifically. Every result from this tool is inherently high-credibility, with much better signal-to-noise for debunked viral claims.
-
-### 4. Scam Detector
-Uses deterministic regex patterns (not LLM) to detect manipulation tactics: urgency pressure, chain letters, financial threats, prize scams, phishing links, health misinformation, false authority claims, and religious manipulation. Deterministic by design — never hallucinates, fully auditable.
-
 ## Sample Verdict Output
 
 ```json
 {
-  "requestId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "verdict": "FALSE",
   "confidence": 0.95,
-  "explanation": "This claim about 15 days of darkness has been repeatedly debunked since 2015. NASA has never made such an announcement. Multiple fact-checking organizations have confirmed this is a recurring hoax.",
-  "claims": [
-    {
-      "id": "c1",
-      "text": "NASA confirms Earth will experience 15 days of darkness",
-      "type": "factual"
-    }
-  ],
-  "sources": [
-    {
-      "title": "No, NASA Did Not Predict 15 Days of Darkness",
-      "url": "https://www.snopes.com/fact-check/15-days-of-darkness/",
-      "snippet": "This claim has been circulating since 2015 and has been repeatedly debunked...",
-      "credibility": "high"
-    }
-  ],
-  "toolsUsed": ["claim_extractor", "web_search", "fact_check_db"],
-  "reasoning": "Step 1: Extracted one factual claim about NASA and darkness. Step 2: Web search found no credible sources confirming this claim. Step 3: Fact-check databases from Snopes and AFP confirm this is a debunked hoax originating from 2015.",
-  "processingTimeMs": 4523,
-  "timestamp": "2024-11-15T10:30:00.000Z"
+  "explanation": "This claim about 15 days of darkness has been repeatedly debunked since 2015. NASA has never made such an announcement.",
+  "claims": [{"id": "c1", "text": "NASA confirms 15 days of darkness", "type": "factual"}],
+  "sources": [{"title": "Snopes: 15 Days of Darkness", "url": "https://snopes.com/...", "snippet": "Debunked...", "credibility": "high"}],
+  "toolsUsed": ["claim_extractor", "rag_misinfo_search", "web_search", "fact_check_db", "source_credibility"],
+  "reasoning": "Step 1: RAG matched known hoax '15 days of darkness'. Step 2: Web search confirmed debunking by multiple fact-checkers..."
 }
 ```
-
-## Known Limitations
-
-- **No persistent storage** — results are not cached; designed for stateless deployment
-- **Rate limiting is in-memory** — resets on server restart; production would use Redis
-- **WhatsApp DOM selectors may change** — WhatsApp Web updates could break the content script; selectors are documented and easy to update
-- **No authentication** — anyone who can reach the backend can use it; production would add auth
-- **English-optimized** — claim extraction and fact-checking work best for English content
-- **Tavily free tier limits** — heavy usage may hit API rate limits
-- **Agent response time** — complex claims with multiple tools may take 5-15 seconds
-
-## Future Improvements
-
-- **Response caching** — cache results by message hash to avoid re-checking identical forwards
-- **Multi-language support** — translate claims before fact-checking
-- **Confidence calibration** — track accuracy over time and calibrate confidence scores
-- **Redis rate limiting** — distributed rate limiting for production
-- **WebSocket streaming** — stream agent reasoning steps in real-time to the tooltip
-- **Image/video analysis** — extend to verify claims in media, not just text
-- **User feedback loop** — let users report incorrect verdicts to improve accuracy
-- **Batch verification** — check all visible messages at once
