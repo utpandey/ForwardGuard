@@ -15,6 +15,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { logger } from "./middleware/logger.js";
 import { verifyRoutes } from "./routes/verify.js";
+import { followUpRoutes } from "./routes/followup.js";
 
 // ─── Environment Validation ─────────────────────────────────────────────────
 // Fail fast — never run silently with missing credentials.
@@ -129,6 +130,9 @@ fastify.get("/api/v1/health", async () => {
 
 // Verification endpoint
 await fastify.register(verifyRoutes);
+
+// Follow-up Q&A endpoint
+await fastify.register(followUpRoutes);
 
 // ─── Start Server ───────────────────────────────────────────────────────────
 

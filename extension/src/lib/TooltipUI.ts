@@ -248,6 +248,112 @@ export const TOOLTIP_STYLES = `
 @keyframes fg-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ─── Follow-Up Q&A ───────────────────────────────────────── */
+.fg-followup {
+  padding: 10px 14px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.fg-followup-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 6px;
+}
+
+.fg-followup-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.fg-followup-input {
+  flex: 1;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #333;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.fg-followup-input:focus {
+  border-color: #0075e8;
+}
+
+.fg-followup-input::placeholder {
+  color: #aaa;
+}
+
+.fg-followup-send {
+  background: #0075e8;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.fg-followup-send:hover {
+  background: #005bb5;
+}
+
+.fg-followup-send:disabled {
+  background: #b0b0b0;
+  cursor: not-allowed;
+}
+
+.fg-followup-answers {
+  margin-top: 8px;
+}
+
+.fg-followup-qa {
+  margin-bottom: 8px;
+  padding: 8px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.fg-followup-question {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 4px;
+}
+
+.fg-followup-answer {
+  font-size: 12px;
+  color: #333;
+  line-height: 1.5;
+}
+
+.fg-followup-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #666;
+}
+
+.fg-followup-loading .fg-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.fg-followup-error {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #dc3545;
+}
 `;
 
 // ─── HTML Renderers ─────────────────────────────────────────────────────────
@@ -341,5 +447,35 @@ export function renderResult(data: VerifyResponse): string {
     </div>
     ${sourcesHtml}
     ${toolsHtml}
+  `;
+}
+
+/** Render the follow-up question input area */
+export function renderFollowUpInput(): string {
+  return `
+    <div class="fg-followup">
+      <div class="fg-followup-label">Ask a follow-up</div>
+      <div class="fg-followup-input-row">
+        <input
+          type="text"
+          class="fg-followup-input"
+          data-fg-followup-input
+          placeholder="e.g. Which sources are most reliable?"
+          maxlength="500"
+        />
+        <button class="fg-followup-send" data-fg-followup-send>Ask</button>
+      </div>
+      <div class="fg-followup-answers" data-fg-followup-answers></div>
+    </div>
+  `;
+}
+
+/** Render a follow-up Q&A pair */
+export function renderFollowUpAnswer(question: string, answer: string): string {
+  return `
+    <div class="fg-followup-qa">
+      <div class="fg-followup-question">Q: ${escapeHtml(question)}</div>
+      <div class="fg-followup-answer">${escapeHtml(answer)}</div>
+    </div>
   `;
 }

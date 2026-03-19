@@ -40,6 +40,16 @@ export type VerifyResult =
   | { ok: true; data: VerifyResponse }
   | { ok: false; error: string; code?: string };
 
+export interface FollowUpResult {
+  requestId: string;
+  answer: string;
+  timestamp: string;
+}
+
+export type FollowUpResponse =
+  | { ok: true; data: FollowUpResult }
+  | { ok: false; error: string; code?: string };
+
 // ─── Configuration ──────────────────────────────────────────────────────────
 
 /**
@@ -95,6 +105,66 @@ export async function verifyMessage(
     }
     if (err instanceof TypeError) {
       // TypeError is thrown for network failures (DNS, connection refused, etc.)
+      return {
+        ok: false,
+        error: "Cannot connect to ForwardGuard backend. Is it running on localhost:3001?",
+        code: "NETWORK_ERROR",
+      };
+    }
+    return {
+      ok: false,
+      error: "An unexpected error occurred. Please try again.",
+      code: "UNKNOWN",
+    };
+  }
+}
+
+/**
+ * Send a follow-up question about a previous verification verdict.
+ *
+ * @param question - The follow-up question (5-500 chars)
+ * @param verdictContext - The previous verdict context
+ * @returns A discriminated union: { ok: true, data } or { ok: false, error }
+ */
+export async function askFollowUp(
+  question: string,
+  verdictContext: {
+    verdict: string;
+    confidence: number;
+    explanation: string;
+    claims: Claim[];
+    sources: Source[];
+    reasoning: string;
+  }
+): Promise<FollowUpResponse> {
+  try {
+    const response = await fetch(`${BACKEND_URL}/followup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, verdictContext }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: data.error || `Follow-up failed (${response.status})`,
+        code: data.code,
+      };
+    }
+
+    return { ok: true, data: data as FollowUpResult };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      return {
+        ok: false,
+        error: "Follow-up request timed out. Please try again.",
+        code: "TIMEOUT",
+      };
+    }
+    if (err instanceof TypeError) {
       return {
         ok: false,
         error: "Cannot connect to ForwardGuard backend. Is it running on localhost:3001?",

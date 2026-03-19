@@ -10,8 +10,9 @@
  */
 
 import type { PlasmoCSConfig } from "plasmo"
-import { verifyMessage } from "../api/verify"
-import { TOOLTIP_STYLES, renderLoading, renderError, renderResult } from "../lib/TooltipUI"
+import { verifyMessage, askFollowUp } from "../api/verify"
+import type { VerifyResponse } from "../api/verify"
+import { TOOLTIP_STYLES, renderLoading, renderError, renderResult, renderFollowUpInput, renderFollowUpAnswer } from "../lib/TooltipUI"
 
 // ─── Plasmo Content Script Configuration ────────────────────────────────────
 
@@ -124,7 +125,7 @@ async function handleVerifyClick(
     return
   }
 
-  const tooltip = showTooltip(wrapper, renderResult(result.data))
+  const tooltip = showTooltip(wrapper, renderResult(result.data) + renderFollowUpInput())
 
   tooltip.querySelectorAll("a[data-fg-link]").forEach((link) => {
     link.addEventListener("click", (e) => {
@@ -132,6 +133,86 @@ async function handleVerifyClick(
       e.stopPropagation()
       window.open((link as HTMLAnchorElement).href, "_blank")
     })
+  })
+
+  // Wire up follow-up Q&A
+  wireFollowUpHandlers(tooltip, result.data)
+}
+
+/**
+ * Wire up the follow-up question input and send button in a tooltip.
+ * Allows multiple follow-up questions — answers are appended below the input.
+ */
+function wireFollowUpHandlers(tooltip: HTMLElement, verdictData: VerifyResponse): void {
+  const input = tooltip.querySelector("[data-fg-followup-input]") as HTMLInputElement | null
+  const sendBtn = tooltip.querySelector("[data-fg-followup-send]") as HTMLButtonElement | null
+  const answersContainer = tooltip.querySelector("[data-fg-followup-answers]") as HTMLElement | null
+
+  if (!input || !sendBtn || !answersContainer) return
+
+  const verdictContext = {
+    verdict: verdictData.verdict,
+    confidence: verdictData.confidence,
+    explanation: verdictData.explanation,
+    claims: verdictData.claims,
+    sources: verdictData.sources,
+    reasoning: verdictData.reasoning,
+  }
+
+  async function handleSend(): Promise<void> {
+    const question = input!.value.trim()
+    if (question.length < 5) return
+
+    // Disable input while loading
+    input!.disabled = true
+    sendBtn!.disabled = true
+    sendBtn!.textContent = "..."
+
+    // Show loading indicator
+    const loadingEl = document.createElement("div")
+    loadingEl.className = "fg-followup-loading"
+    loadingEl.innerHTML = '<div class="fg-spinner"></div><span>Thinking...</span>'
+    answersContainer!.appendChild(loadingEl)
+
+    const result = await askFollowUp(question, verdictContext)
+
+    // Remove loading indicator
+    loadingEl.remove()
+
+    if (result.ok) {
+      // Append the Q&A pair
+      const qaHtml = renderFollowUpAnswer(question, result.data.answer)
+      const qaEl = document.createElement("div")
+      qaEl.innerHTML = qaHtml
+      answersContainer!.appendChild(qaEl.firstElementChild!)
+    } else {
+      // Show error
+      const errorEl = document.createElement("div")
+      errorEl.className = "fg-followup-error"
+      errorEl.textContent = result.error
+      answersContainer!.appendChild(errorEl)
+    }
+
+    // Re-enable input and clear
+    input!.disabled = false
+    sendBtn!.disabled = false
+    sendBtn!.textContent = "Ask"
+    input!.value = ""
+    input!.focus()
+  }
+
+  sendBtn.addEventListener("click", (e) => {
+    e.stopPropagation()
+    e.preventDefault()
+    handleSend()
+  })
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.stopPropagation()
+      e.preventDefault()
+      handleSend()
+    }
   })
 }
 

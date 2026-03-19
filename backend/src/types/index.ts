@@ -110,3 +110,23 @@ export interface AgentVerdict {
   toolsUsed: string[];
   reasoning: string;
 }
+
+// ─── Follow-Up Q&A Types ───────────────────────────────────────────────────
+
+export interface FollowUpRequest {
+  question: string;
+  verdictContext: {
+    verdict: string;
+    confidence: number;
+    explanation: string;
+    claims: Claim[];
+    sources: Source[];
+    reasoning: string;
+  };
+}
+
+export interface FollowUpResponse {
+  requestId: string;
+  answer: string;
+  timestamp: string;
+}
